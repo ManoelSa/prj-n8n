@@ -1,0 +1,21 @@
+# Ambiente
+.env
+.env.development
+.env.local
+
+# Docker Data e Volumes (Se mapeados localmente no futuro)
+postgres_data/
+redis_data/
+n8n_data/
+evolution_store/
+evolution_instances/
+nocodb_data/
+traefik_certs/
+
+# Logs e Temporários
+node_modules/
+*.log
+*.tmp
+*.bak
+anotacoes.txt
+STRUCTURE_REVIEW.md

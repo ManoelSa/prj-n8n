@@ -1,0 +1,3 @@
+CREATE DATABASE evolution;
+CREATE DATABASE nocodb;
+CREATE DATABASE chatwoot;

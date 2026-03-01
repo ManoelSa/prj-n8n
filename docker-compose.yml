@@ -1,0 +1,217 @@
+version: '3.8'
+
+services:
+  # ---------------- Traefik (Reverse Proxy) ----------------
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    restart: always
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=${SSL_EMAIL}" # E-mail para registrar o SSL Let's Encrypt
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json" # Onde os certificados ficarão salvos
+      # Redirecionamento forçado de HTTP para HTTPS
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # Painel do Traefik localmente (Feche via firewall na VPS se necessário)
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "traefik_certs:/letsencrypt"
+    networks:
+      - zap_network
+
+  # ---------------- Postgres principal ----------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER} # Nome do superusuário do banco
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} # Senha master do banco
+      POSTGRES_DB: ${POSTGRES_DB} # Nome do banco de dados principal (usado pelo n8n)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres_init:/docker-entrypoint-initdb.d
+    networks:
+      - zap_network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------- Redis ----------------
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - zap_network
+
+  # ---------------- n8n ----------------
+  n8n:
+    image: n8nio/n8n:2.8.3
+    container_name: n8n
+    restart: always
+    environment:
+      - N8N_HOST=${N8N_SUBDOMAIN}.${DOMAIN_NAME} # Subdomínio que o webhook usará publicamente
+      - N8N_PORT=5678 # Porta interna do n8n
+      - N8N_PROTOCOL=${N8N_PROTOCOL} # Geralmente 'https' em produção
+      - WEBHOOK_URL=https://${N8N_SUBDOMAIN}.${DOMAIN_NAME}/ # URL base para os webhooks que o n8n gera
+      - DB_TYPE=postgresdb # Define que o n8n usará um banco externo (Postgres)
+      - DB_POSTGRESDB_HOST=postgres # Nome do container do banco de dados na rede
+      - DB_POSTGRESDB_PORT=5432 # Porta padrão do Postgres
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB} # Banco de dados do n8n no Postgres
+      - DB_POSTGRESDB_USER=${POSTGRES_USER} # Usuário do banco
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD} # Senha do banco
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY} # Chave secreta para criptografar credenciais no n8n (MUITO IMPORTANTE)
+      - N8N_SECURE_COOKIE=true # Exige SSL para os cookies do painel
+      - N8N_EDITOR_BASE_URL=https://${N8N_SUBDOMAIN}.${DOMAIN_NAME}/ # URL da interface visual do n8n
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zap_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(`${N8N_SUBDOMAIN}.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls.certresolver=myresolver"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+
+  # ---------------- Evolution API ----------------
+  evolution_api:
+    image: evoapicloud/evolution-api:v2.3.6
+    container_name: evolution_api
+    restart: always
+    environment:
+      - SERVER_PORT=8081 # Porta interna da API
+      - SERVER_URL=https://${EVOLUTION_API_SUBDOMAIN}.${DOMAIN_NAME} # A URL pública que o Traefik apontará
+      - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY} # Chave mestra global (Global API Key)
+      - DATABASE_PROVIDER=postgresql # Provider do banco de dados principal
+      - DATABASE_CONNECTION_URI=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/evolution?schema=public # String de conexão para criar o banco 'evolution'
+      - CACHE_REDIS_ENABLED=true # Ativa o Redis para melhor performance
+      - CACHE_REDIS_URI=redis://redis:6379 # Endereço do Redis na rede Docker
+      - CACHE_REDIS_PREFIX=evolution # Prefixo das chaves no Redis para evitar conflito
+    volumes:
+      - evolution_store:/evolution/store
+      - evolution_instances:/evolution/instances
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - zap_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.evolution.rule=Host(`${EVOLUTION_API_SUBDOMAIN}.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.evolution.entrypoints=websecure"
+      - "traefik.http.routers.evolution.tls.certresolver=myresolver"
+      - "traefik.http.services.evolution.loadbalancer.server.port=8081"
+
+  # ---------------- NocoDB ----------------
+  nocodb:
+    image: nocodb/nocodb:0.301.2
+    container_name: nocodb
+    restart: always
+    environment:
+      - NC_DB=pg://postgres:5432?u=${POSTGRES_USER}&p=${POSTGRES_PASSWORD}&d=nocodb # String de conexão para o banco 'nocodb'
+      - NC_PUBLIC_URL=https://${NOCODB_SUBDOMAIN}.${DOMAIN_NAME}
+    volumes:
+      - nocodb_data:/usr/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zap_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nocodb.rule=Host(`${NOCODB_SUBDOMAIN}.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.nocodb.entrypoints=websecure"
+      - "traefik.http.routers.nocodb.tls.certresolver=myresolver"
+      - "traefik.http.services.nocodb.loadbalancer.server.port=8080"
+
+  # ---------------- Chatwoot ----------------
+  chatwoot_web:
+    image: chatwoot/chatwoot:v3.13.1
+    container_name: chatwoot_web
+    restart: always
+    environment:
+      - RAILS_ENV=production # Executa o Ruby on Rails em modo otimizado
+      - SECRET_KEY_BASE=${CHATWOOT_SECRET_KEY_BASE} # Chave criptográfica obrigatória para sessões do Chatwoot
+      - FRONTEND_URL=https://${CHATWOOT_SUBDOMAIN}.${DOMAIN_NAME} # URL principal onde o painel do Chatwoot vai rodar
+      - REDIS_URL=redis://redis:6379 # Endereço do Redis para cache e websockets do Chatwoot
+      - POSTGRES_HOST=postgres # Nome do container do banco
+      - POSTGRES_PORT=5432 # Porta do banco
+      - POSTGRES_DATABASE=chatwoot # Nome do banco específico que o Chatwoot vai criar e usar
+      - POSTGRES_USERNAME=${POSTGRES_USER} # Usuário do banco
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # Senha do banco
+      - ENABLE_ACCOUNT_SIGNUP=true # Permite criar a primeira conta Admin
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - zap_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.chatwoot_web.rule=Host(`${CHATWOOT_SUBDOMAIN}.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.chatwoot_web.entrypoints=websecure"
+      - "traefik.http.routers.chatwoot_web.tls.certresolver=myresolver"
+      - "traefik.http.services.chatwoot_web.loadbalancer.server.port=3000"
+    command: >
+      sh -c "bundle exec rails db:chatwoot_prepare &&
+             bundle exec rails s -p 3000 -b 0.0.0.0"
+
+  chatwoot_worker:
+    image: chatwoot/chatwoot:v3.13.1
+    container_name: chatwoot_worker
+    restart: always
+    environment:
+      - RAILS_ENV=production # Modo de produção para rodar tarefas em background
+      - SECRET_KEY_BASE=${CHATWOOT_SECRET_KEY_BASE} # Precisa da mesma chave do chatwoot_web
+      - FRONTEND_URL=https://${CHATWOOT_SUBDOMAIN}.${DOMAIN_NAME}
+      - REDIS_URL=redis://redis:6379 # Redis usado para as filas de processamento do Sidekiq
+      - POSTGRES_HOST=postgres # Container de banco
+      - POSTGRES_PORT=5432 # Porta de banco
+      - POSTGRES_DATABASE=chatwoot # Mesmo banco do web
+      - POSTGRES_USERNAME=${POSTGRES_USER} # Mesmo usuário
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # Mesma senha
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - zap_network
+    command: bundle exec sidekiq
+
+# ---------------- Network ----------------
+networks:
+  zap_network:
+    driver: bridge
+
+# ---------------- Volumes ----------------
+volumes:
+  postgres_data:
+  redis_data:
+  n8n_data:
+  evolution_store:
+  evolution_instances:
+  nocodb_data:
+  traefik_certs:
