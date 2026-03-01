@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # ---------------- Traefik (Reverse Proxy) ----------------
   traefik:
-    image: traefik:v2.10
+    image: traefik:v2.11
     container_name: traefik
     restart: always
     command:
@@ -147,7 +147,7 @@ services:
 
   # ---------------- Chatwoot ----------------
   chatwoot_web:
-    image: chatwoot/chatwoot:v3.13.1
+    image: chatwoot/chatwoot:v4.11.1
     container_name: chatwoot_web
     restart: always
     environment:
@@ -179,7 +179,7 @@ services:
              bundle exec rails s -p 3000 -b 0.0.0.0"
 
   chatwoot_worker:
-    image: chatwoot/chatwoot:v3.13.1
+    image: chatwoot/chatwoot:v4.11.1
     container_name: chatwoot_worker
     restart: always
     environment:
