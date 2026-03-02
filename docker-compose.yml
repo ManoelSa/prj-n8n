@@ -161,6 +161,7 @@ services:
       - POSTGRES_USERNAME=${POSTGRES_USER} # Usuário do banco
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # Senha do banco
       - ENABLE_ACCOUNT_SIGNUP=true # Permite criar a primeira conta Admin
+      - INSTALLATION_NAME=RTI Digital # Customiza o título da página do painel
     depends_on:
       postgres:
         condition: service_healthy
@@ -192,6 +193,7 @@ services:
       - POSTGRES_DATABASE=chatwoot # Mesmo banco do web
       - POSTGRES_USERNAME=${POSTGRES_USER} # Mesmo usuário
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # Mesma senha
+      - INSTALLATION_NAME=RTI Digital
     depends_on:
       postgres:
         condition: service_healthy
