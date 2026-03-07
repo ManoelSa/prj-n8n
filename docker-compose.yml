@@ -33,6 +33,8 @@ services:
     image: pgvector/pgvector:pg16
     container_name: postgres
     restart: always
+    ports:
+      - "127.0.0.1:5432:5432" # Exposto apenas localmente na VPS para acesso seguro via túnel SSH
     environment:
       POSTGRES_USER: ${POSTGRES_USER} # Nome do superusuário do banco
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} # Senha master do banco
@@ -69,6 +71,7 @@ services:
       - N8N_PORT=5678 # Porta interna do n8n
       - N8N_PROTOCOL=${N8N_PROTOCOL} # Geralmente 'https' em produção
       - WEBHOOK_URL=https://${N8N_SUBDOMAIN}.${DOMAIN_NAME}/ # URL base para os webhooks que o n8n gera
+      #- WEBHOOK_URL=https://flow.rti-digital.com.br
       - DB_TYPE=postgresdb # Define que o n8n usará um banco externo (Postgres)
       - DB_POSTGRESDB_HOST=postgres # Nome do container do banco de dados na rede
       - DB_POSTGRESDB_PORT=5432 # Porta padrão do Postgres
@@ -106,6 +109,9 @@ services:
       - CACHE_REDIS_ENABLED=true # Ativa o Redis para melhor performance
       - CACHE_REDIS_URI=redis://redis:6379 # Endereço do Redis na rede Docker
       - CACHE_REDIS_PREFIX=evolution # Prefixo das chaves no Redis para evitar conflito
+      - CHATWOOT_ENABLED=true
+      - CHATWOOT_MESSAGE_READ=true
+      - CHATWOOT_MESSAGE_DELETE=true
     volumes:
       - evolution_store:/evolution/store
       - evolution_instances:/evolution/instances
@@ -161,7 +167,6 @@ services:
       - POSTGRES_USERNAME=${POSTGRES_USER} # Usuário do banco
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # Senha do banco
       - ENABLE_ACCOUNT_SIGNUP=true # Permite criar a primeira conta Admin
-      - INSTALLATION_NAME=RTI Digital # Customiza o título da página do painel
     depends_on:
       postgres:
         condition: service_healthy
@@ -193,7 +198,7 @@ services:
       - POSTGRES_DATABASE=chatwoot # Mesmo banco do web
       - POSTGRES_USERNAME=${POSTGRES_USER} # Mesmo usuário
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # Mesma senha
-      - INSTALLATION_NAME=RTI Digital
+      - INSTALLATION_NAME=RTI Digital #Rotulo
     depends_on:
       postgres:
         condition: service_healthy
